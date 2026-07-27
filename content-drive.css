@@ -1,0 +1,20 @@
+#dps-edit-btn {
+  position: fixed;
+  top: 12px;
+  right: 220px;
+  z-index: 999999;
+  background: #1a73e8;
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  padding: 9px 18px;
+  font-size: 14px;
+  font-family: 'Google Sans', Roboto, Arial, sans-serif;
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+#dps-edit-btn:hover {
+  background: #1765cc;
+}

@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "Wakyeng PDF SIGN",
+  "version": "1.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEApeQMwh7wcebjTZwgQifc/d0IBmjQtHOrIVOU2vA+a+R6dx6KP6NIj5m9LK47agvYEQ/zvtTfgCDvqWltq2RfW5gqGVc9mXwxm3CeOMS/kzvtyIOVTv5jMJACKfKBZ5U2q8syyTNq5wbrfZSeMuW8e7Vh6yOS2hDBXOwJ+wBDsMZAugtuLDWn3Zw0zJ0PevXOpNgZlgX7JEb09YGbqbhOjCuuobrpJEah5rtehMpuk4uokV5zOUx73+ghmnWr3JlfXNkWLy5prx0vlX2+LUd+sI1qTTn/1+sDW6QLArsB3+Jt9OlB+oO4bNgJQyJpgmMEZafduc+ANryXgOONx03WKwIDAQAB",
+  "description": "Tambahkan tanda tangan/gambar ke PDF di Google Drive langsung dari Chrome.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "permissions": ["identity"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "https://drive.google.com/*",
+    "https://www.googleapis.com/*"
+  ],
+  "oauth2": {
+    "client_id": "635710334964-39v2585gqfdk33c4667jrkaoqtj8phhg.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/drive"]
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://drive.google.com/file/d/*"],
+      "js": ["content-drive.js"],
+      "css": ["content-drive.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
