@@ -1,4 +1,15 @@
-pdfjsLib.GlobalWorkerOptions.workerSrc = chrome.runtime.getURL('vendor/pdf.worker.min.js');
+const hasChromeIdentity = typeof chrome !== 'undefined' && chrome.identity && chrome.runtime && chrome.runtime.getURL;
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = hasChromeIdentity
+  ? chrome.runtime.getURL('vendor/pdf.worker.min.js')
+  : 'vendor/pdf.worker.min.js';
+
+// Non-extension hosts (Android WebView, plain web app) call this after sign-in
+// to hand over an OAuth access token.
+window.setExternalToken = function setExternalToken(token) {
+  window.__externalToken = token;
+};
+window.setAndroidToken = window.setExternalToken;
 
 const RENDER_SCALE = 1.4;
 
@@ -18,7 +29,18 @@ function setStatus(text) {
 }
 
 function getAuthToken(interactive) {
+  if (window.__externalToken) {
+    return Promise.resolve(window.__externalToken);
+  }
+  if (typeof AndroidTokenBridge !== 'undefined' && AndroidTokenBridge.getToken) {
+    const bridgeToken = AndroidTokenBridge.getToken();
+    if (bridgeToken) return Promise.resolve(bridgeToken);
+  }
   return new Promise((resolve, reject) => {
+    if (!hasChromeIdentity) {
+      reject(new Error('Mekanisme login Google tidak tersedia di lingkungan ini.'));
+      return;
+    }
     chrome.identity.getAuthToken({ interactive }, (token) => {
       if (chrome.runtime.lastError || !token) {
         reject(new Error(chrome.runtime.lastError?.message || 'Gagal mendapatkan token akses Google'));
@@ -31,6 +53,11 @@ function getAuthToken(interactive) {
 
 function removeCachedToken(token) {
   return new Promise((resolve) => {
+    if (!hasChromeIdentity) {
+      window.__externalToken = null;
+      resolve();
+      return;
+    }
     chrome.identity.removeCachedAuthToken({ token }, resolve);
   });
 }
@@ -64,24 +91,28 @@ async function renderPdf(bytesForRender) {
   const pdf = await pdfjsLib.getDocument({ data: bytesForRender }).promise;
 
   for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const viewport = page.getViewport({ scale: RENDER_SCALE });
+    try {
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: RENDER_SCALE });
 
-    const canvas = document.createElement('canvas');
-    canvas.width = viewport.width;
-    canvas.height = viewport.height;
-    const ctx = canvas.getContext('2d');
-    await page.render({ canvasContext: ctx, viewport }).promise;
+      const canvas = document.createElement('canvas');
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      const ctx = canvas.getContext('2d');
+      await page.render({ canvasContext: ctx, viewport }).promise;
 
-    const wrapper = document.createElement('div');
-    wrapper.className = 'page-wrapper';
-    wrapper.style.width = `${viewport.width}px`;
-    wrapper.style.height = `${viewport.height}px`;
-    wrapper.dataset.pageIndex = String(i - 1);
-    wrapper.appendChild(canvas);
+      const wrapper = document.createElement('div');
+      wrapper.className = 'page-wrapper';
+      wrapper.style.width = `${viewport.width}px`;
+      wrapper.style.height = `${viewport.height}px`;
+      wrapper.dataset.pageIndex = String(i - 1);
+      wrapper.appendChild(canvas);
 
-    viewerEl.appendChild(wrapper);
-    pageWrappers.push(wrapper);
+      viewerEl.appendChild(wrapper);
+      pageWrappers.push(wrapper);
+    } catch (err) {
+      throw new Error(`halaman ${i}: ${err.message}`);
+    }
   }
 }
 
@@ -155,13 +186,14 @@ function makeDraggable(overlay) {
   const el = overlay.el;
   let startX, startY, startLeft, startTop;
 
-  el.addEventListener('mousedown', (e) => {
+  el.addEventListener('pointerdown', (e) => {
     if (e.target.classList.contains('resize-handle') ||
         e.target.classList.contains('remove-handle') ||
         e.target.classList.contains('page-nav-handle')) {
       return;
     }
     e.preventDefault();
+    el.setPointerCapture(e.pointerId);
     startX = e.clientX;
     startY = e.clientY;
     startLeft = el.offsetLeft;
@@ -176,12 +208,14 @@ function makeDraggable(overlay) {
     }
 
     function onUp() {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      el.removeEventListener('pointermove', onMove);
+      el.removeEventListener('pointerup', onUp);
+      el.removeEventListener('pointercancel', onUp);
     }
 
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    el.addEventListener('pointermove', onMove);
+    el.addEventListener('pointerup', onUp);
+    el.addEventListener('pointercancel', onUp);
   });
 }
 
@@ -189,9 +223,10 @@ function makeResizable(overlay, handle) {
   const el = overlay.el;
   const img = el.querySelector('img');
 
-  handle.addEventListener('mousedown', (e) => {
+  handle.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     e.stopPropagation();
+    handle.setPointerCapture(e.pointerId);
     const startX = e.clientX;
     const startWidth = el.offsetWidth;
     const aspect = (img.naturalHeight && img.naturalWidth) ? img.naturalHeight / img.naturalWidth : 0.4;
@@ -205,21 +240,37 @@ function makeResizable(overlay, handle) {
     }
 
     function onUp() {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
     }
 
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
   });
+}
+
+function computeCenterPosition(wrapper, width, height) {
+  const rect = wrapper.getBoundingClientRect();
+  const viewTop = Math.max(rect.top, 0);
+  const viewBottom = Math.min(rect.bottom, window.innerHeight);
+  const centerY = (viewTop + viewBottom) / 2 - rect.top;
+  const centerX = window.innerWidth / 2 - rect.left;
+
+  return {
+    left: clamp(centerX - width / 2, 0, Math.max(0, wrapper.clientWidth - width)),
+    top: clamp(centerY - height / 2, 0, Math.max(0, wrapper.clientHeight - height))
+  };
 }
 
 function moveOverlayToPage(overlay, newIndex) {
   if (newIndex < 0 || newIndex >= pageWrappers.length) return;
   const newWrapper = pageWrappers[newIndex];
   overlay.pageWrapper = newWrapper;
-  overlay.el.style.left = '40px';
-  overlay.el.style.top = '40px';
+  const pos = computeCenterPosition(newWrapper, overlay.el.offsetWidth, overlay.el.offsetHeight);
+  overlay.el.style.left = `${pos.left}px`;
+  overlay.el.style.top = `${pos.top}px`;
   newWrapper.appendChild(overlay.el);
 }
 
@@ -264,7 +315,11 @@ function addImageOverlay(dataUrl, mimeType, bytes, pageIdx) {
 
   img.addEventListener('load', () => {
     if (img.naturalWidth && img.naturalHeight) {
-      el.style.height = `${160 * (img.naturalHeight / img.naturalWidth)}px`;
+      const height = 160 * (img.naturalHeight / img.naturalWidth);
+      el.style.height = `${height}px`;
+      const pos = computeCenterPosition(targetPage, el.offsetWidth, height);
+      el.style.left = `${pos.left}px`;
+      el.style.top = `${pos.top}px`;
     }
   });
 
@@ -515,9 +570,9 @@ async function handleSave() {
 
 saveBtnEl.addEventListener('click', handleSave);
 
-async function init() {
+async function init(overrideFileId) {
   const params = new URLSearchParams(location.search);
-  fileId = params.get('fileId');
+  fileId = overrideFileId || params.get('fileId');
   if (!fileId) {
     setStatus('fileId tidak ditemukan pada URL.');
     return;
@@ -550,7 +605,13 @@ async function init() {
   if (name) document.title = `${name} - Drive PDF Signer`;
 
   setStatus('Merender PDF...');
-  await renderPdf(originalPdfBytes.slice().buffer);
+  try {
+    await renderPdf(originalPdfBytes.slice().buffer);
+  } catch (err) {
+    console.error(err);
+    setStatus(`Gagal merender PDF: ${err.message}`);
+    return;
+  }
   populatePageSelect();
   setStatus(name ? `${name} — siap diedit` : 'Siap. Tambahkan gambar/tanda tangan lalu simpan.');
 }
